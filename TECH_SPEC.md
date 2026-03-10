@@ -30,41 +30,51 @@ Automated Python web scraper that syncs parts catalog data from two suppliers (A
 
 ### Stack
 - **Language:** Python 3.11+
-- **Scraper:** Playwright (handles JavaScript, anti-bot evasion)
+- **Crawler Framework:** Scrapy (request scheduling, concurrency, retries)
+- **Browser Rendering:** scrapy-playwright (handles JavaScript, anti-bot evasion)
 - **Database:** PostgreSQL (psycopg2)
 - **Scheduling:** Cron (Linux) or GitHub Actions
 - **Notifications:** Telegram alerts on completion/failure
 
-### Project Structure
+### Architecture
+```
+Scrapy Scheduler
+     ↓
+Request Queue (Redis/SQLite)
+     ↓
+scrapy-playwright (browser rendering)
+     ↓
+HTML → Parser
+     ↓
+PostgreSQL Pipeline
+```
+
+### Project Structure (Scrapy Project)
 ```
 wms-catalog-scraper/
-├── src/
+├── wms_scraper/              # Scrapy project
 │   ├── __init__.py
-│   ├── scraper.py          # Main scraper logic
-│   ├── auth.py             # Login handling
-│   ├── parsers/
-│   │   ├── __init__.py
-│   │   ├── alert.py        # Alert catalog parser
-│   │   └── motus.py        # Motus catalog parser
-│   ├── database/
-│   │   ├── __init__.py
-│   │   ├── connection.py   # PostgreSQL connection
-│   │   └── models.py       # Data models
-│   └── utils/
+│   ├── settings.py           # Scrapy settings + Playwright config
+│   ├── items.py              # Scrapy items (Part, SyncLog)
+│   ├── pipelines.py          # PostgreSQL pipeline
+│   ├── middlewares.py        # Auth middleware
+│   └── spiders/
 │       ├── __init__.py
-│       └── helpers.py      # Utility functions
+│       ├── alert.py          # Alert catalog spider
+│       └── motus.py          # Motus catalog spider
 ├── config/
-│   ├── config.yaml         # Configuration (credentials from env)
-│   └── logging.yaml        # Logging configuration
+│   ├── config.yaml           # Configuration
+│   └── logging.yaml          # Logging configuration
 ├── scripts/
-│   └── run_weekly.sh       # Cron script
+│   └── run_weekly.sh         # Cron script
 ├── tests/
-│   └── test_scraper.py     # Unit tests
-├── .env.example            # Environment variables template
-├── requirements.txt        # Python dependencies
-├── Dockerfile              # Docker container
-├── docker-compose.yml      # Docker orchestration
-└── README.md               # Documentation
+│   └── test_spider.py        # Unit tests
+├── .env.example              # Environment variables template
+├── requirements.txt          # Python dependencies
+├── Dockerfile                # Docker container
+├── docker-compose.yml        # Docker orchestration
+├── scrapy.cfg                # Scrapy config
+└── README.md                 # Documentation
 ```
 
 ---

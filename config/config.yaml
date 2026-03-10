@@ -1,0 +1,52 @@
+# WMS Catalog Scraper Configuration
+
+# Scraper Settings
+scraper:
+  headless: true
+  delay_min: 2.0
+  delay_max: 5.0
+  max_retries: 3
+  timeout: 60000  # 60 seconds
+
+# Browser Settings
+browser:
+  viewport:
+    width: 1920
+    height: 1080
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+  locale: "en-ZA"
+  timezone: "Africa/Johannesburg"
+
+# Rate Limiting
+rate_limit:
+  requests_per_minute: 30
+  min_delay: 2.0
+  max_delay: 5.0
+
+# Database Settings (loaded from environment)
+database:
+  pool_min: 2
+  pool_max: 10
+  command_timeout: 60
+
+# Logging
+logging:
+  level: INFO
+  file: logs/scraper.log
+  rotation: "10 MB"
+  retention: "7 days"
+
+# Notifications
+notifications:
+  telegram:
+    enabled: true
+    # Bot token and chat ID from environment
+
+# Catalog URLs
+catalogs:
+  alert:
+    url: "https://web1.carparts-cat.com/default.aspx?10=7FD0A9CE5E4D41DEACA81956B6408394494004&14=4&12=1003"
+    name: "Alert"
+  motus:
+    url: "https://web1.carparts-cat.com"
+    name: "Motus"
