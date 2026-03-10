@@ -72,8 +72,13 @@ PLAYWRIGHT_CONTEXTS = {
 
 # Configure item pipelines
 ITEM_PIPELINES = {
-    "wms_scraper.pipelines.WmsScraperPipeline": 300,
+    "wms_scraper.pipelines.LocalImagePipeline": 100,  # Download images first
+    "wms_scraper.pipelines.WmsScraperPipeline": 300,  # Then save to database
 }
+
+# Image settings
+IMAGES_DIR = os.getenv("IMAGES_DIR", "/var/www/wms-images")
+IMAGES_URL_PREFIX = os.getenv("IMAGES_URL_PREFIX", "https://images.wmsgroup.co.za")
 
 # Enable and configure HTTP caching
 HTTPCACHE_ENABLED = False

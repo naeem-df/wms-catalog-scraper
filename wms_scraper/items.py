@@ -24,6 +24,11 @@ class CatalogPartItem(scrapy.Item):
     retail_price = scrapy.Field()
     stock_quantity = scrapy.Field()
     
+    # Image fields
+    image_urls = scrapy.Field()  # List of image URLs to download
+    image_paths = scrapy.Field()  # Local paths after download
+    image_url = scrapy.Field()  # Primary image path
+    
     # Metadata
     source_url = scrapy.Field()
     scraped_at = scrapy.Field()

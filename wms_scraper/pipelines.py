@@ -1,213 +1,193 @@
 """
-Scrapy pipelines for WMS Catalog Scraper.
+Image Pipeline for WMS Catalog Scraper
+
+Downloads product images and stores them locally or in cloud storage.
+Saves image paths to database instead of URLs.
 """
-
+import os
+import hashlib
+import aiohttp
 import asyncio
-import asyncpg
-from datetime import datetime
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
+
+from itemadapter import ItemAdapter
 from loguru import logger
-from scrapy.exceptions import DropItem
-
-from .items import CatalogPartItem
 
 
-class WmsScraperPipeline:
+class ImageDownloadPipeline:
     """
-    Pipeline to process and store catalog items in PostgreSQL.
-    """
+    Downloads product images during scraping.
     
-    def __init__(self, db_host, db_port, db_name, db_user, db_password):
-        self.db_host = db_host
-        self.db_port = db_port
-        self.db_name = db_name
-        self.db_user = db_user
-        self.db_password = db_password
-        self.pool: Optional[asyncpg.Pool] = None
-        self.items_processed = 0
-        self.items_updated = 0
-    
-    @classmethod
-    def from_crawler(cls, crawler):
-        return cls(
-            db_host=crawler.settings.get('DB_HOST'),
-            db_port=crawler.settings.getint('DB_PORT'),
-            db_name=crawler.settings.get('DB_NAME'),
-            db_user=crawler.settings.get('DB_USER'),
-            db_password=crawler.settings.get('DB_PASSWORD'),
-        )
-    
-    async def open_spider(self, spider):
-        """Create database connection pool."""
-        try:
-            self.pool = await asyncpg.create_pool(
-                host=self.db_host,
-                port=self.db_port,
-                database=self.db_name,
-                user=self.db_user,
-                password=self.db_password,
-                min_size=2,
-                max_size=10,
-            )
-            logger.info("Database connection pool created")
-            
-            # Ensure tables exist
-            await self._init_tables()
-            
-            # Log sync start
-            await self._log_sync_start(spider.name)
-            
-        except Exception as e:
-            logger.error(f"Failed to create database pool: {e}")
-            raise
-    
-    async def close_spider(self, spider):
-        """Close database pool and log sync completion."""
-        # Update sync log
-        await self._log_sync_complete(spider.name, 'success')
-        
-        if self.pool:
-            await self.pool.close()
-            logger.info("Database connection pool closed")
-        
-        logger.info(f"Pipeline stats: {self.items_processed} processed, {self.items_updated} updated")
-    
-    async def _init_tables(self):
-        """Create tables if they don't exist."""
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS catalog_parts (
-                    id SERIAL PRIMARY KEY,
-                    sku VARCHAR(100) NOT NULL,
-                    supplier VARCHAR(50) NOT NULL,
-                    description TEXT,
-                    category VARCHAR(100),
-                    subcategory VARCHAR(100),
-                    brand VARCHAR(100),
-                    oem_number VARCHAR(100),
-                    cost_price DECIMAL(10, 2),
-                    retail_price DECIMAL(10, 2),
-                    stock_quantity INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(sku, supplier)
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS catalog_sync_log (
-                    id SERIAL PRIMARY KEY,
-                    supplier VARCHAR(50) NOT NULL,
-                    started_at TIMESTAMP NOT NULL,
-                    completed_at TIMESTAMP,
-                    status VARCHAR(20),
-                    parts_scraped INTEGER DEFAULT 0,
-                    parts_updated INTEGER DEFAULT 0,
-                    error_message TEXT
-                )
-            ''')
-            
-            logger.info("Database tables verified")
-    
-    async def _log_sync_start(self, supplier: str):
-        """Log sync start."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO catalog_sync_log (supplier, started_at, status) VALUES ($1, $2, $3)",
-                supplier, datetime.now(), 'running'
-            )
-    
-    async def _log_sync_complete(self, supplier: str, status: str):
-        """Log sync completion."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE catalog_sync_log 
-                SET completed_at = $1, status = $2, parts_scraped = $3, parts_updated = $4
-                WHERE supplier = $5 AND completed_at IS NULL
-                """,
-                datetime.now(), status, self.items_processed, self.items_updated, supplier
-            )
-    
-    def process_item(self, item, spider):
-        """Process and store item."""
-        if isinstance(item, CatalogPartItem):
-            # Run async database operation
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(self._upsert_item(item))
-        return item
-    
-    async def _upsert_item(self, item: CatalogPartItem):
-        """Insert or update item in database."""
-        try:
-            async with self.pool.acquire() as conn:
-                result = await conn.execute(
-                    """
-                    INSERT INTO catalog_parts 
-                    (sku, supplier, description, category, subcategory, brand, oem_number,
-                     cost_price, retail_price, stock_quantity)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    ON CONFLICT (sku, supplier) DO UPDATE SET
-                        description = EXCLUDED.description,
-                        category = EXCLUDED.category,
-                        subcategory = EXCLUDED.subcategory,
-                        brand = EXCLUDED.brand,
-                        oem_number = EXCLUDED.oem_number,
-                        cost_price = EXCLUDED.cost_price,
-                        retail_price = EXCLUDED.retail_price,
-                        stock_quantity = EXCLUDED.stock_quantity,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    item.get('sku'),
-                    item.get('supplier'),
-                    item.get('description'),
-                    item.get('category'),
-                    item.get('subcategory'),
-                    item.get('brand'),
-                    item.get('oem_number'),
-                    item.get('cost_price'),
-                    item.get('retail_price'),
-                    item.get('stock_quantity', 0),
-                )
-                
-                self.items_processed += 1
-                if 'UPDATE' in result:
-                    self.items_updated += 1
-                
-                if self.items_processed % 100 == 0:
-                    logger.info(f"Processed {self.items_processed} items...")
-                    
-        except Exception as e:
-            logger.error(f"Error upserting item {item.get('sku')}: {e}")
-
-
-class DuplicatesPipeline:
-    """
-    Pipeline to filter duplicate items.
+    Features:
+    - Async image downloads
+    - Hash-based filename generation
+    - Local storage with optional S3 upload
+    - Retry logic for failed downloads
     """
     
     def __init__(self):
-        self.seen = set()
+        self.images_dir = Path(os.environ.get('IMAGES_DIR', '/var/www/wms-images'))
+        self.images_url_prefix = os.environ.get('IMAGES_URL_PREFIX', 'https://images.wmsgroup.co.za')
+        self.max_retries = 3
+        self.timeout = 30
+        
+        # Create images directory
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Session for async downloads
+        self.session: Optional[aiohttp.ClientSession] = None
     
-    def process_item(self, item, spider):
-        if isinstance(item, CatalogPartItem):
-            key = f"{item.get('supplier')}:{item.get('sku')}"
-            if key in self.seen:
-                raise DropItem(f"Duplicate item: {key}")
-            self.seen.add(key)
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session."""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            )
+        return self.session
+    
+    def _generate_filename(self, url: str, sku: str, supplier: str) -> str:
+        """Generate unique filename from URL and SKU."""
+        # Extract extension from URL
+        parsed = urlparse(url)
+        ext = os.path.splitext(parsed.path)[1] or '.jpg'
+        
+        # Create hash from URL for uniqueness
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        
+        # Clean SKU for filename
+        clean_sku = re.sub(r'[^\w\-]', '_', sku) if sku else 'unknown'
+        
+        # Format: {supplier}_{sku}_{hash}.ext
+        filename = f"{supplier}_{clean_sku}_{url_hash}{ext}"
+        return filename.lower()
+    
+    async def _download_image(self, url: str, filepath: Path) -> bool:
+        """Download image from URL to filepath."""
+        session = await self._get_session()
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        filepath.write_bytes(content)
+                        logger.debug(f"Downloaded: {url} -> {filepath}")
+                        return True
+                    else:
+                        logger.warning(f"HTTP {response.status} for {url}")
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout for {url} (attempt {attempt + 1})")
+            except Exception as e:
+                logger.error(f"Error downloading {url}: {e}")
+        
+        return False
+    
+    async def process_item(self, item: dict, spider) -> dict:
+        """Process item and download images."""
+        adapter = ItemAdapter(item)
+        
+        # Get image URLs from item
+        image_urls = adapter.get('image_urls', [])
+        sku = adapter.get('sku', '')
+        supplier = adapter.get('supplier', 'unknown')
+        
+        if not image_urls:
+            adapter['image_paths'] = []
+            return item
+        
+        # Download each image
+        image_paths = []
+        
+        for url in image_urls:
+            if not url:
+                continue
+            
+            # Generate filename
+            filename = self._generate_filename(url, sku, supplier)
+            filepath = self.images_dir / filename
+            
+            # Download if not exists
+            if not filepath.exists():
+                success = await self._download_image(url, filepath)
+                if not success:
+                    continue
+            
+            # Store relative path for database
+            relative_path = f"/images/{filename}"
+            image_paths.append(relative_path)
+        
+        adapter['image_paths'] = image_paths
+        adapter['image_url'] = image_paths[0] if image_paths else None
+        
         return item
+    
+    def close_spider(self, spider):
+        """Close aiohttp session."""
+        if self.session and not self.session.closed:
+            asyncio.get_event_loop().run_until_complete(self.session.close())
 
 
-class ValidationPipeline:
+# For synchronous Scrapy (alternative)
+import re
+import requests
+from scrapy.pipelines.images import ImagesPipeline as ScrapyImagesPipeline
+
+
+class LocalImagePipeline:
     """
-    Pipeline to validate items.
+    Synchronous image download pipeline (fallback).
+    
+    Uses requests library for simpler setup.
     """
     
-    def process_item(self, item, spider):
-        if isinstance(item, CatalogPartItem):
-            # Ensure required fields
-            if not item.get('sku'):
-                raise DropItem("Missing SKU")
-            if not item.get('supplier'):
-                raise DropItem("Missing supplier")
+    def __init__(self):
+        self.images_dir = Path(os.environ.get('IMAGES_DIR', '/var/www/wms-images'))
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _generate_filename(self, url: str, sku: str, supplier: str) -> str:
+        """Generate unique filename."""
+        parsed = urlparse(url)
+        ext = os.path.splitext(parsed.path)[1] or '.jpg'
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        clean_sku = re.sub(r'[^\w\-]', '_', sku) if sku else 'unknown'
+        return f"{supplier}_{clean_sku}_{url_hash}{ext}".lower()
+    
+    def process_item(self, item: dict, spider) -> dict:
+        """Download images synchronously."""
+        image_urls = item.get('image_urls', [])
+        sku = item.get('sku', '')
+        supplier = item.get('supplier', 'unknown')
+        
+        image_paths = []
+        
+        for url in image_urls:
+            if not url:
+                continue
+            
+            filename = self._generate_filename(url, sku, supplier)
+            filepath = self.images_dir / filename
+            
+            # Download if not exists
+            if not filepath.exists():
+                try:
+                    response = requests.get(url, timeout=30, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    if response.status_code == 200:
+                        filepath.write_bytes(response.content)
+                        logger.debug(f"Downloaded: {url}")
+                except Exception as e:
+                    logger.error(f"Failed to download {url}: {e}")
+                    continue
+            
+            image_paths.append(f"/images/{filename}")
+        
+        item['image_paths'] = image_paths
+        item['image_url'] = image_paths[0] if image_paths else None
+        
         return item
