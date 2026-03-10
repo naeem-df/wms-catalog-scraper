@@ -50,9 +50,11 @@ else
     exit 1
 fi
 
-# Run scraper
+# Run scraper using Scrapy
 log "Starting scraper..."
-python -m src.scraper scrape --supplier all --headless --notify 2>&1 | tee -a "$LOG_FILE"
+
+# Run both spiders
+python run.py scrape all --headless 2>&1 | tee -a "$LOG_FILE"
 
 # Check exit code
 EXIT_CODE=${PIPESTATUS[0]}
