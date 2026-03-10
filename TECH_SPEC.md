@@ -81,7 +81,7 @@ wms-catalog-scraper/
 
 ## Database Schema
 
-### Target Tables (d3mvdb)
+### Target Tables (d3mvdb - Primary WMS Database)
 
 #### `catalog_parts` (Main parts table)
 ```sql
